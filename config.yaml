@@ -1,0 +1,178 @@
+# yaml-language-server: $schema=./node_modules/envio/evm.schema.json
+#
+# Kinetiq kHYPE — HyperEVM (chain 999)
+#
+# Every signature below was verified against the chain: its topic0 was computed with
+# keccak-256 from the canonical form and matched against logs actually observed on
+# HyperEVM. An ABI entry is a hypothesis until it shows up on chain — see README.md
+# ("Two signatures the published ABI gets wrong").
+#
+# start_block is 0 on purpose: HyperSync skips empty ranges for free, so there is no
+# cost to starting at genesis and no deploy block to get wrong. The protocol's first
+# log is at block 7,635,341 (2025-07-05).
+name: kinetiq-khype
+description: Kinetiq kHYPE liquid staking — full event surface on HyperEVM
+
+field_selection:
+  transaction_fields:
+    - hash
+
+contracts:
+  # ---------------------------------------------------------------------------
+  # kHYPE — the liquid staking token (ERC20PermitUpgradeable + AccessControl)
+  # ---------------------------------------------------------------------------
+  - name: KHYPE
+    events:
+      - event: "Transfer(address indexed from, address indexed to, uint256 value)" # ~10.5M
+      - event: "Approval(address indexed owner, address indexed spender, uint256 value)" # 945,069
+      - event: "RoleGranted(bytes32 indexed role, address indexed account, address indexed sender)" # 4
+      - event: "RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)" # 1
+      - event: "RoleAdminChanged(bytes32 indexed role, bytes32 indexed previousAdminRole, bytes32 indexed newAdminRole)" # 2
+      - event: "HypercoreDeployerSet(address indexed deployer)" # 1
+      - event: "Upgraded(address indexed implementation)" # 3
+      - event: "AdminChanged(address previousAdmin, address newAdmin)" # 1
+      - event: "Initialized(uint64 version)" # 1
+
+  # ---------------------------------------------------------------------------
+  # StakingManager — an EIP-2535 diamond since block 31,872,097. The cut was
+  # ADDITIVE: no pre-existing signature changed its topic0, so indexing from
+  # genesis with the current signatures still recovers the whole history.
+  # Eight signatures only exist after the cut (marked "post-cut").
+  # ---------------------------------------------------------------------------
+  - name: StakingManager
+    events:
+      # --- staking / delegation core ---
+      - event: "L1OperationAggregated(address indexed staking, address indexed validator, uint256 addedAmount, uint256 newTotalAmount, uint8 operationType)" # 84,794 — OperationType enum == uint8
+      - event: "StakeReceived(address indexed staking, address indexed staker, uint256 amount)" # 69,465
+      - event: "Delegate(address indexed staking, address indexed validator, uint256 amount)" # 67,966
+      - event: "ValidatorWithdrawal(address indexed staking, address indexed validator, uint256 amount)" # 13,103
+      - event: "WithdrawalQueued(address indexed staking, address indexed user, uint256 indexed withdrawalId, uint256 kHYPEAmount, uint256 hypeAmount, uint256 feeAmount)" # 13,058 — withdrawalId is a PER-USER nonce
+      - event: "WithdrawalConfirmed(address indexed user, uint256 indexed withdrawalId, uint256 amount)" # 12,204
+      - event: "L1DelegationQueued(address indexed staking, address indexed validator, uint256 amount, uint8 operationType)" # 3,578
+      - event: "L1DelegationProcessed(address indexed staking, address indexed validator, uint256 amount, uint8 operationType)" # 3,577
+      - event: "L1OperationsQueued(address[] validators, uint256[] amounts, uint8[] operationTypes)" # 262
+      - event: "L1OperationsBatchProcessed(uint256 processedCount, uint256 remainingCount)" # 260
+      - event: "SpotWithdrawn(uint256 amount)" # 244
+      # --- post-cut only (nothing before block 31,872,097) ---
+      - event: "RewardDistributionQueued(uint256 indexed distributionId, address indexed validator, uint256 amount)" # 1,532 — 3-param form; the verified ABI's 6-param form has NEVER fired
+      - event: "InstantUnstakeExecuted(address indexed user, uint256 kHYPEAmount, uint256 hypeReceived, uint256 kHYPEFee, uint256 feeRateBps, uint256 kHYPEFeeBurned, uint256 kHYPEFeeToTreasury)" # 1,495
+      - event: "RewardDistributionCompleted(uint256 indexed distributionId, uint256 rewardShare)" # 1,420
+      - event: "RedelegationRequested(address indexed user, address indexed fromValidator, address indexed toValidator, uint256 amount0, uint256 amount1, uint256 amount2)" # 249 — param names UNVERIFIED, see README
+      - event: "BufferRebalanceWithdrawal(uint256 amount)" # 45
+      - event: "BufferRebalanceCompleted(uint256 indexed rebalanceId, uint256 amount)" # 44
+      - event: "FacetAdded(address indexed facet, bytes4[] selectors)" # 7
+      - event: "DiamondCut((address facet, uint8 action, bytes4[] selectors)[] facetCuts)" # 7
+      - event: "FacetRegistrySet(address indexed oldRegistry, address indexed newRegistry)" # 1
+      - event: "OracleManagerUpdated(address oracleManager)" # 1
+      - event: "RewardShareTrackerUpdated(address indexed newRewardShareTracker)" # 1
+      - event: "InstantUnstakePoolUpdated(address poolAddress)" # 1
+      - event: "QuickWithdrawalDelayUpdated(uint256 newDelay)" # 1
+      - event: "UnstakeFeeRateUpdated(uint256 newRate)" # 1
+      # --- config / access control ---
+      - event: "AddressWhitelisted(address indexed account)" # 52
+      - event: "WhitelistDisabled()" # 2
+      - event: "WhitelistEnabled()" # 2
+      - event: "MinStakeAmountUpdated(uint256 newMinStakeAmount)" # 2
+      - event: "TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury)" # 1
+      - event: "RoleGranted(bytes32 indexed role, address indexed account, address indexed sender)" # 7
+      - event: "RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)" # 4
+      - event: "Upgraded(address indexed implementation)" # 6
+      - event: "AdminChanged(address previousAdmin, address newAdmin)" # 1
+      - event: "Initialized(uint64 version)" # 1
+
+  # ---------------------------------------------------------------------------
+  # StakingAccountant — the protocol's own accounting. Its two accumulators are
+  # validation anchors 1 and 2 (totalStaked / totalClaimed).
+  # ---------------------------------------------------------------------------
+  - name: StakingAccountant
+    events:
+      - event: "StakeRecorded(address indexed manager, uint256 amount)" # 69,465 — Σ == StakingAccountant.totalStaked()
+      - event: "ClaimRecorded(address indexed manager, uint256 amount)" # 12,760 — Σ == StakingAccountant.totalClaimed()
+      - event: "StakingManagerAuthorized(address indexed manager, address indexed token)" # 1
+      - event: "RoleGranted(bytes32 indexed role, address indexed account, address indexed sender)" # 4
+      - event: "RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)" # 2
+      - event: "Upgraded(address indexed implementation)" # 3
+      - event: "AdminChanged(address previousAdmin, address newAdmin)" # 1
+      - event: "Initialized(uint64 version)" # 1
+
+  # ---------------------------------------------------------------------------
+  # ValidatorManager — validator lifecycle and the reward/slashing accumulators
+  # (validation anchor 3).
+  # ---------------------------------------------------------------------------
+  - name: ValidatorManager
+    events:
+      - event: "ValidatorPerformanceUpdated(address indexed validator, uint256 timestamp, uint256 blockNumber)" # 3,893
+      - event: "RewardEventReported(address indexed validator, uint256 amount)" # 3,631 — Σ == ValidatorManager.totalRewards()
+      - event: "SlashingEventReported(address indexed validator, uint256 amount)" # 0 to date — Σ == totalSlashing() == 0. Registered so a first slash is captured, not missed.
+      - event: "ValidatorActivated(address indexed validator)" # 25
+      - event: "ValidatorDeactivated(address indexed validator)" # 10
+      - event: "DelegationUpdated(address indexed stakingManager, address indexed oldDelegation, address indexed newDelegation)" # 1
+      - event: "RoleGranted(bytes32 indexed role, address indexed account, address indexed sender)" # 5
+      - event: "RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)" # 2
+      - event: "Upgraded(address indexed implementation)" # 3
+      - event: "AdminChanged(address previousAdmin, address newAdmin)" # 1
+      - event: "Initialized(uint64 version)" # 1
+
+  # ---------------------------------------------------------------------------
+  # OracleManager — the StakeHub oracle gateway.
+  # ---------------------------------------------------------------------------
+  - name: OracleManager
+    events:
+      - event: "PerformanceUpdated(address indexed validator, uint256 timestamp)" # 3,893 — must equal ValidatorPerformanceUpdated
+      - event: "ValidatorBehaviorCheckFailed(address indexed validator, string reason)" # 287 — dead tail: last emitted at block 14,213,280
+      - event: "SanityCheckerUpdated(address indexed newChecker)" # 6
+      - event: "OracleAuthorized(address indexed oracle)" # 1
+      - event: "OracleActiveStateChanged(address indexed oracle, bool active)" # 1
+      - event: "StakingManagerUpdated(address indexed newStakingManager)" # 1
+      - event: "RewardShareTrackerUpdated(address indexed newRewardShareTracker)" # 1
+      - event: "RoleGranted(bytes32 indexed role, address indexed account, address indexed sender)" # 6
+      - event: "RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)" # 3
+      - event: "Upgraded(address indexed implementation)" # 3
+      - event: "AdminChanged(address previousAdmin, address newAdmin)" # 1
+      - event: "Initialized(uint64 version)" # 1
+
+  # ---------------------------------------------------------------------------
+  # DefaultOracle — the raw per-validator StakeHub feed. 6,954 snapshots; this
+  # event is the only place that history exists anywhere.
+  # ---------------------------------------------------------------------------
+  - name: DefaultOracle
+    events:
+      - event: "MetricsUpdated(address indexed validator, uint256 balance, uint256 performanceScore, uint256 reward, uint256 slashing, uint256 endBlock)" # 6,954
+      - event: "RoleGranted(bytes32 indexed role, address indexed account, address indexed sender)" # 4
+      - event: "RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)" # 2
+
+  # ---------------------------------------------------------------------------
+  # PauserRegistry — the LIVE one, read off kHYPE.pauserRegistry(). The address
+  # published on Kinetiq's contracts page has zero bytecode and has never emitted
+  # a log; an indexer built from the docs would show a protocol that was never
+  # paused. See README.md.
+  # ---------------------------------------------------------------------------
+  - name: PauserRegistry
+    events:
+      - event: "ContractPaused(address indexed contractAddress)" # 5
+      - event: "ContractUnpaused(address indexed contractAddress)" # 5
+      - event: "RoleGranted(bytes32 indexed role, address indexed account, address indexed sender)" # 8
+      - event: "RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)" # 4
+      - event: "RoleAdminChanged(bytes32 indexed role, bytes32 indexed previousAdminRole, bytes32 indexed newAdminRole)" # 3
+      - event: "Upgraded(address indexed implementation)" # 3
+      - event: "AdminChanged(address previousAdmin, address newAdmin)" # 1
+      - event: "Initialized(uint64 version)" # 1
+
+chains:
+  - id: 999 # HyperEVM
+    start_block: 0
+    contracts:
+      - name: KHYPE
+        address: "0xfD739d4e423301CE9385c1fb8850539D657C296D"
+      - name: StakingManager
+        address: "0x393D0B87Ed38fc779FD9611144aE649BA6082109"
+      - name: StakingAccountant
+        address: "0x9209648Ec9D448EF57116B73A2f081835643dc7A"
+      - name: ValidatorManager
+        address: "0x4b797A93DfC3D18Cf98B7322a2b142FA8007508f"
+      - name: OracleManager
+        address: "0x192826e470bd65FDC2CB472eDd834D096233049b"
+      - name: DefaultOracle
+        address: "0xefbcCc6E33DA1C1ef638cBc0F044968D0f590fED"
+      - name: PauserRegistry
+        address: "0x752E76ea71960Da08644614E626c9F9Ff5a50547"

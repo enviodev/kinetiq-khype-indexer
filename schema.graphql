@@ -1,0 +1,499 @@
+##############################################################################
+# Kinetiq kHYPE — HyperEVM (chain 999)
+#
+# All amounts are raw wei-scale integers (kHYPE and HYPE both use 18 decimals).
+# Timestamps are unix seconds as BigInt. Every entity is derived purely from
+# events — no RPC reads, no off-chain enrichment.
+##############################################################################
+
+# ---------------------------------------------------------------------------
+# Token
+# ---------------------------------------------------------------------------
+
+# kHYPE is a linked spot asset: it moves between HyperCore and HyperEVM through
+# HyperCore *system transactions*, which are not part of this indexer's event
+# stream. Those transfers are always plain account->account moves out of the
+# linked-spot bridge (0x2000..0079) — never mints and never burns — so supply is
+# reconstructable exactly, but per-account balances and whole-token transfer
+# counts are not. Anything that would silently absorb the gap is therefore left
+# out rather than shipped with an asterisk: no `Holder` entity, no holderCount,
+# no transferCount/transferVolume. See README "Scope of the token surface".
+type Token {
+  id: ID! # token address
+  symbol: String!
+  decimals: Int!
+  # totalSupply == Σ Transfer(from=0).value − Σ Transfer(to=0).value.
+  # Verified equal to kHYPE.totalSupply() to the wei at a pinned block.
+  totalSupply: BigInt!
+  totalMinted: BigInt!
+  totalBurned: BigInt!
+  mintCount: BigInt!
+  burnCount: BigInt!
+  approvalCount: BigInt!
+  lastBlock: BigInt!
+  lastTimestamp: BigInt!
+}
+
+type Allowance {
+  id: ID! # "<owner>-<spender>"
+  owner: String! @index
+  spender: String! @index
+  amount: BigInt!
+  updateCount: Int!
+  lastBlock: BigInt! @index
+  lastTimestamp: BigInt!
+}
+
+# ---------------------------------------------------------------------------
+# Protocol-wide state — the singleton P6 validates against the contracts.
+# id is always "kinetiq".
+# ---------------------------------------------------------------------------
+
+type ProtocolStats {
+  id: ID!
+
+  # --- the four accumulators the exchange rate is built from ---
+  totalStaked: BigInt! #     == StakingAccountant.totalStaked()
+  totalClaimed: BigInt! #    == StakingAccountant.totalClaimed()
+  totalRewards: BigInt! #    == ValidatorManager.totalRewards()
+  totalSlashing: BigInt! #   == ValidatorManager.totalSlashing()
+  kHypeTotalSupply: BigInt! # == kHYPE.totalSupply()
+
+  # (staked + rewards − claimed − slashing); exchangeRate is that over supply,
+  # scaled 1e18, and must equal StakingAccountant.kHYPEToHYPE(1e18).
+  totalHypeBacking: BigInt!
+  exchangeRate: BigInt!
+
+  # --- event counters (the invariants that must partition / match) ---
+  stakeReceivedCount: Int! #               == stakeRecordedCount
+  stakeRecordedCount: Int!
+  claimRecordedCount: Int! #               >= withdrawalConfirmedCount
+  withdrawalQueuedCount: Int! #            >= withdrawalConfirmedCount
+  withdrawalConfirmedCount: Int!
+  instantUnstakeCount: Int!
+  delegateCount: Int!
+  validatorWithdrawalCount: Int!
+  redelegationCount: Int!
+  l1OperationAggregatedCount: Int!
+  l1DelegationQueuedCount: Int!
+  l1DelegationProcessedCount: Int!
+  performanceUpdatedCount: Int! #          == validatorPerformanceUpdatedCount
+  validatorPerformanceUpdatedCount: Int!
+  metricsUpdatedCount: Int!
+  rewardEventReportedCount: Int!
+  slashingEventReportedCount: Int!
+  rewardDistributionQueuedCount: Int! #    >= rewardDistributionCompletedCount
+  rewardDistributionCompletedCount: Int!
+  behaviorCheckFailedCount: Int!
+  pauseCount: Int!
+  unpauseCount: Int!
+  upgradeCount: Int!
+  diamondCutCount: Int!
+
+  # --- flow aggregates ---
+  totalStakeReceived: BigInt!
+  totalDelegated: BigInt!
+  totalValidatorWithdrawn: BigInt!
+  totalWithdrawalQueuedKHype: BigInt!
+  totalWithdrawalQueuedHype: BigInt!
+  totalWithdrawalFees: BigInt!
+  totalWithdrawalConfirmed: BigInt!
+  totalInstantUnstakeKHype: BigInt!
+  totalInstantUnstakeHypeOut: BigInt!
+  totalInstantUnstakeFee: BigInt!
+  totalInstantUnstakeFeeBurned: BigInt!
+  totalInstantUnstakeFeeTreasury: BigInt!
+  totalSpotWithdrawn: BigInt!
+  totalBufferRebalanced: BigInt!
+  totalRewardDistributionQueued: BigInt!
+
+  # --- live state ---
+  pendingWithdrawalCount: Int!
+  pendingWithdrawalKHype: BigInt!
+  validatorCount: Int!
+  activeValidatorCount: Int!
+  stakerCount: Int!
+  pausedContractCount: Int!
+  whitelistEnabled: Boolean!
+  minStakeAmount: BigInt!
+  unstakeFeeRateBps: BigInt!
+  quickWithdrawalDelay: BigInt!
+  treasury: String
+  lastBlock: BigInt!
+  lastTimestamp: BigInt!
+}
+
+# One row per block in which the exchange rate could have moved (a stake, a
+# claim, a reward report, a slash, or a supply-changing mint/burn). This is the
+# time series nobody currently has — APR is its slope.
+type ExchangeRateSnapshot {
+  id: ID! # block number, zero-padded to 12 chars so lexical order == numeric
+  blockNumber: BigInt! @index
+  timestamp: BigInt! @index
+  exchangeRate: BigInt!
+  totalHypeBacking: BigInt!
+  totalSupply: BigInt!
+  totalStaked: BigInt!
+  totalClaimed: BigInt!
+  totalRewards: BigInt!
+  totalSlashing: BigInt!
+}
+
+type DailyProtocolStat {
+  id: ID! # YYYY-MM-DD (UTC)
+  date: String! @index
+  dayStartTimestamp: BigInt! @index
+  # No transferCount/transferVolume/holderCountClose here: see the note on Token.
+  # mint/burn volume is complete, because mints and burns never travel in a
+  # HyperCore system transaction.
+  mintVolume: BigInt!
+  burnVolume: BigInt!
+  stakeCount: Int!
+  stakeVolume: BigInt!
+  withdrawalQueuedCount: Int!
+  withdrawalQueuedVolume: BigInt!
+  withdrawalConfirmedCount: Int!
+  withdrawalConfirmedVolume: BigInt!
+  instantUnstakeCount: Int!
+  instantUnstakeVolume: BigInt!
+  rewardsReported: BigInt!
+  exchangeRateOpen: BigInt!
+  exchangeRateClose: BigInt!
+  totalSupplyClose: BigInt!
+  totalStakedClose: BigInt!
+}
+
+# ---------------------------------------------------------------------------
+# Staking
+# ---------------------------------------------------------------------------
+
+type Staker {
+  id: ID! # address
+  totalStaked: BigInt!
+  stakeCount: Int!
+  totalWithdrawalRequestedKHype: BigInt!
+  withdrawalRequestCount: Int!
+  withdrawalConfirmedCount: Int!
+  totalWithdrawalConfirmed: BigInt!
+  totalInstantUnstakedKHype: BigInt!
+  instantUnstakeCount: Int!
+  firstActionBlock: BigInt! @index
+  lastActionBlock: BigInt! @index
+}
+
+type StakeEvent {
+  id: ID! # "<chainId>_<block>_<logIndex>"
+  staker: Staker! @index
+  amount: BigInt!
+  blockNumber: BigInt! @index
+  timestamp: BigInt! @index
+  txHash: String!
+}
+
+enum WithdrawalStatus {
+  Queued
+  Confirmed
+}
+
+# NOTE: withdrawalId is a PER-USER nonce, not a global counter — two different
+# users both hold id 0. The entity id is therefore "<user>-<withdrawalId>".
+type WithdrawalRequest {
+  id: ID!
+  withdrawalId: BigInt! @index
+  user: Staker! @index
+  status: WithdrawalStatus! @index
+  kHypeAmount: BigInt!
+  hypeAmount: BigInt!
+  feeAmount: BigInt!
+  queuedBlock: BigInt! @index
+  queuedTimestamp: BigInt!
+  queuedTxHash: String!
+  confirmedAmount: BigInt
+  confirmedBlock: BigInt @index
+  confirmedTimestamp: BigInt
+  confirmedTxHash: String
+  latencyBlocks: BigInt
+  latencySeconds: BigInt
+  # Confirmed is terminal. A repeat confirmation bumps this counter and is
+  # otherwise ignored — it never rewrites the first settlement.
+  confirmationCount: Int!
+  queueEventCount: Int!
+}
+
+type InstantUnstake {
+  id: ID! # "<chainId>_<block>_<logIndex>"
+  user: Staker! @index
+  kHypeAmount: BigInt!
+  hypeReceived: BigInt!
+  kHypeFee: BigInt!
+  feeRateBps: BigInt!
+  kHypeFeeBurned: BigInt!
+  kHypeFeeToTreasury: BigInt!
+  blockNumber: BigInt! @index
+  timestamp: BigInt! @index
+  txHash: String!
+}
+
+# ---------------------------------------------------------------------------
+# Validators
+# ---------------------------------------------------------------------------
+
+type Validator {
+  id: ID! # address
+  isActive: Boolean! @index
+  activatedBlock: BigInt
+  deactivatedBlock: BigInt
+  activationCount: Int!
+  deactivationCount: Int!
+
+  totalDelegated: BigInt!
+  totalWithdrawn: BigInt!
+  netDelegated: BigInt! @index
+  delegateCount: Int!
+  withdrawalCount: Int!
+  redelegationsIn: Int!
+  redelegationsOut: Int!
+
+  totalRewards: BigInt!
+  totalSlashing: BigInt!
+  rewardEventCount: Int!
+  slashingEventCount: Int!
+  rewardDistributionCount: Int!
+  totalRewardDistributionQueued: BigInt!
+
+  # latest DefaultOracle.MetricsUpdated snapshot
+  lastReportedBalance: BigInt
+  lastPerformanceScore: BigInt
+  lastReportedReward: BigInt
+  lastReportedSlashing: BigInt
+  lastMetricsBlock: BigInt
+  metricsCount: Int!
+  performanceUpdateCount: Int!
+  lastPerformanceTimestamp: BigInt
+
+  behaviorCheckFailureCount: Int!
+  lastBehaviorFailureReason: String
+
+  # newTotalAmount from the most recent L1OperationAggregated for this validator
+  l1PendingAmount: BigInt!
+  firstSeenBlock: BigInt! @index
+  lastActiveBlock: BigInt! @index
+}
+
+# The StakeHub feed. 6,954 snapshots and the only history of validator scores
+# that exists anywhere.
+type ValidatorMetricsSnapshot {
+  id: ID! # "<chainId>_<block>_<logIndex>"
+  validator: Validator! @index
+  balance: BigInt!
+  performanceScore: BigInt!
+  reward: BigInt!
+  slashing: BigInt!
+  endBlock: BigInt!
+  blockNumber: BigInt! @index
+  timestamp: BigInt! @index
+}
+
+# ValidatorManager.ValidatorPerformanceUpdated (the oracle round marker).
+type ValidatorPerformanceReport {
+  id: ID! # "<chainId>_<block>_<logIndex>"
+  validator: Validator! @index
+  reportedTimestamp: BigInt!
+  reportedBlockNumber: BigInt!
+  blockNumber: BigInt! @index
+  timestamp: BigInt! @index
+}
+
+type ValidatorBehaviorFailure {
+  id: ID! # "<chainId>_<block>_<logIndex>"
+  validator: Validator! @index
+  reason: String!
+  blockNumber: BigInt! @index
+  timestamp: BigInt! @index
+}
+
+enum RewardEventKind {
+  Reward
+  Slashing
+}
+
+type ValidatorRewardEvent {
+  id: ID! # "<chainId>_<block>_<logIndex>"
+  validator: Validator! @index
+  kind: RewardEventKind! @index
+  amount: BigInt!
+  blockNumber: BigInt! @index
+  timestamp: BigInt! @index
+}
+
+# ---------------------------------------------------------------------------
+# Delegation flow
+# ---------------------------------------------------------------------------
+
+enum DelegationAction {
+  Delegate
+  ValidatorWithdrawal
+  L1DelegationQueued
+  L1DelegationProcessed
+  RedelegationOut
+  RedelegationIn
+}
+
+type DelegationEvent {
+  id: ID! # "<chainId>_<block>_<logIndex>" (+ suffix where one log yields two rows)
+  action: DelegationAction! @index
+  validator: Validator! @index
+  counterpartyValidator: String @index # redelegations only
+  user: String @index # redelegations only
+  amount: BigInt!
+  operationType: Int # OperationType enum on the L1* events
+  blockNumber: BigInt! @index
+  timestamp: BigInt! @index
+  txHash: String!
+}
+
+type L1Operation {
+  id: ID! # "<chainId>_<block>_<logIndex>"
+  validator: Validator! @index
+  addedAmount: BigInt!
+  newTotalAmount: BigInt!
+  operationType: Int!
+  blockNumber: BigInt! @index
+  timestamp: BigInt! @index
+  txHash: String!
+}
+
+enum L1BatchKind {
+  Queued
+  Processed
+}
+
+type L1OperationBatch {
+  id: ID! # "<chainId>_<block>_<logIndex>"
+  kind: L1BatchKind! @index
+  validatorCount: Int!
+  totalAmount: BigInt!
+  processedCount: BigInt
+  remainingCount: BigInt
+  blockNumber: BigInt! @index
+  timestamp: BigInt! @index
+  txHash: String!
+}
+
+# SpotWithdrawn / BufferRebalanceWithdrawal / BufferRebalanceCompleted — the
+# treasury-side movements that do not touch a validator.
+enum TreasuryMovementKind {
+  SpotWithdrawn
+  BufferRebalanceWithdrawal
+  BufferRebalanceCompleted
+}
+
+type TreasuryMovement {
+  id: ID! # "<chainId>_<block>_<logIndex>"
+  kind: TreasuryMovementKind! @index
+  amount: BigInt!
+  rebalanceId: BigInt
+  blockNumber: BigInt! @index
+  timestamp: BigInt! @index
+  txHash: String!
+}
+
+# ---------------------------------------------------------------------------
+# Reward distribution (post-diamond-cut only)
+# ---------------------------------------------------------------------------
+
+enum RewardDistributionStatus {
+  Queued
+  Completed
+}
+
+type RewardDistribution {
+  id: ID! # distributionId (global, zero-padded)
+  distributionId: BigInt! @index
+  validator: Validator @index
+  amount: BigInt!
+  rewardShare: BigInt
+  status: RewardDistributionStatus! @index
+  queuedBlock: BigInt @index
+  queuedTimestamp: BigInt
+  completedBlock: BigInt @index
+  completedTimestamp: BigInt
+  # Completed is terminal; a repeat completion bumps this and changes nothing else.
+  completionCount: Int!
+  queueEventCount: Int!
+}
+
+# ---------------------------------------------------------------------------
+# Pausing, upgrades, config, roles
+# ---------------------------------------------------------------------------
+
+type PausableContract {
+  id: ID! # address
+  isPaused: Boolean! @index
+  pauseCount: Int!
+  unpauseCount: Int!
+  lastChangeBlock: BigInt! @index
+  lastChangeTimestamp: BigInt!
+}
+
+type PauseEvent {
+  id: ID! # "<chainId>_<block>_<logIndex>"
+  target: PausableContract! @index
+  paused: Boolean! @index
+  blockNumber: BigInt! @index
+  timestamp: BigInt! @index
+  txHash: String!
+}
+
+# The change alarm. The StakingManager diamond can add event signatures with no
+# redeploy — it already has, once, adding eight. Watching these kinds is how the
+# indexer learns about it the day it happens instead of the day someone notices
+# a chart has gone flat.
+enum ProtocolChangeKind {
+  Upgraded
+  DiamondCut
+  FacetAdded
+  FacetRegistrySet
+  AdminChanged
+  Initialized
+}
+
+type ProtocolChangeEvent {
+  id: ID! # "<chainId>_<block>_<logIndex>"
+  contractAddress: String! @index
+  contractName: String! @index
+  kind: ProtocolChangeKind! @index
+  implementation: String
+  facet: String
+  selectorCount: Int
+  detail: String
+  blockNumber: BigInt! @index
+  timestamp: BigInt! @index
+  txHash: String!
+}
+
+type ConfigChangeEvent {
+  id: ID! # "<chainId>_<block>_<logIndex>"
+  contractAddress: String! @index
+  contractName: String! @index
+  setting: String! @index
+  oldValue: String
+  newValue: String!
+  blockNumber: BigInt! @index
+  timestamp: BigInt! @index
+  txHash: String!
+}
+
+type RoleAssignment {
+  id: ID! # "<contract>-<role>-<account>"
+  contractAddress: String! @index
+  contractName: String! @index
+  role: String! @index
+  account: String! @index
+  isActive: Boolean! @index
+  grantCount: Int!
+  revokeCount: Int!
+  grantedBlock: BigInt
+  revokedBlock: BigInt
+  lastBlock: BigInt! @index
+}
